@@ -1,5 +1,6 @@
 import numpy as np
 from random import random
+import threading
 
 
 def init_traders(shape, init_up=0.5):
@@ -77,7 +78,13 @@ def update(black, white, reduced_neighbor_coupling, reduced_alpha):
     global_market = np.sum(black + white)
     market_coupling = reduced_alpha * np.abs(global_market) / number_of_traders
     probabilities = precompute_probabilities(reduced_neighbor_coupling, market_coupling)
-    update_strategies(True, black, white, probabilities)
-    update_strategies(False, white, black, probabilities)
+    black_thread = threading.Thread(group=None, target=update_strategies,
+                                    args=(True, black, white.copy(), probabilities))
+    white_thread = threading.Thread(group=None, target=update_strategies,
+                                    args=(False, white, black.copy(), probabilities))
 
+    black_thread.start()
+    white_thread.start()
+    black_thread.join()
+    white_thread.join()
     return global_market

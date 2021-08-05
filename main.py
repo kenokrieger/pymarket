@@ -3,6 +3,7 @@
 from traders import init_traders, update
 from datetime import datetime
 
+
 def read_config_file(filename):
     config = dict()
     with open(filename, 'r') as f:
