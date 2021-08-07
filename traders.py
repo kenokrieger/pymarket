@@ -1,54 +1,65 @@
 import numpy as np
-from random import random
-import threading
+from numba import cuda
+from numba.cuda.random import xoroshiro128p_uniform_float32
 
 
-def init_traders(shape, init_up=0.5):
+@cuda.jit
+def init_traders(is_black, rng_states, target, shape, init_up=0.5):
     """
-    Initialise two arrays of spins randomly pointing up or down.
+    Flip 'init_up' percentage of spins on GPU.
     """
-    color_shape = (shape[0], int(shape[1] / 2), shape[2])
-    black = np.ones(color_shape)
-    white = np.ones(color_shape)
+    startx, starty, startz = cuda.grid(3)
+    stridex, stridey, stridez = cuda.gridsize(3)
+    # Linearized thread index
+    thread_id = (startz * stridey * stridex) + (starty * stridex) + startx
 
-    for color in (black, white):
-        for row in range(color_shape[0]):
-            for col in range(color_shape[1]):
-                for lid in range(color_shape[2]):
-                    if random() < init_up:
-                        color[row][col][lid] = -1
+    # Use strided loops over the array to assign a random value to each entry
+    for row in range(startz, shape[0], stridez):
+        for col in range(starty, shape[1], stridey):
+            for lid in range(startx, shape[2], stridex):
+                random = xoroshiro128p_uniform_float32(rng_states, thread_id)
+                if random < init_up:
+                    target[row, col, lid] = -1
 
-    return black, white
 
-
-def precompute_probabilities(reduced_neighbor_coupling, market_coupling):
+def precompute_probabilities(probabilities, reduced_neighbor_coupling, market_coupling):
     """
     Precompute all possible values for the flip-probabilities.
     """
-    probabilities = dict()
-    for spin in range(-1, 2):
-        probabilities[spin] = dict()
-        for neighbor_sum in range(-6, 8, 2):
+    for row in range(0, 2):
+        spin = 1 if row else -1
+        for col in range(7):
+            neighbor_sum = -6 + 2 * col
             field = reduced_neighbor_coupling * neighbor_sum - market_coupling * spin
-            probabilities[spin][neighbor_sum] = 1 / (1 + np.exp(field))
-    return probabilities
+            probabilities[row * 7 + col] = 1 / (1 + np.exp(field))
 
 
-def update_strategies(is_black, source, checkerboard_agents, probabilities):
+@cuda.jit
+def update_strategies(is_black, rng_states, source, checkerboard_agents, probabilities, shape):
     """
     Update all spins in one array according to the Heatbath dynamic.
     """
-    grid_height, grid_width, grid_depth = source.shape
-    for row in range(grid_height):
-        for col in range(grid_width):
-            for lid in range(grid_depth):
-                spin = source[row][col][lid]
-                lower_neighbor_row = row + 1 if (row + 1 < grid_height) else 0
+    startx, starty, startz = cuda.grid(3)
+    stridex, stridey, stridez = cuda.gridsize(3)
+    # Linearized thread index
+    thread_id = (startz * stridey * stridex) + (starty * stridex) + startx
+
+    # Use strided loops over the array to assign a random value to each entry
+    for row in range(startz, shape[0], stridez):
+        for col in range(starty, shape[1], stridey):
+            for lid in range(startx, shape[2], stridex):
+                grid_size = shape[0] * shape[1]
+                row = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+                col = cuda.blockIdx.y * cuda.blockDim.y + cuda.threadIdx.y
+                lid = cuda.blockIdx.z * cuda.blockDim.z + cuda.threadIdx.z
+                spin = source[row, col, lid]
+
+                lower_neighbor_row = row + 1 if (row + 1 < shape[0]) else 0
                 upper_neighbor_row = row - 1
-                right_neighbor_col = col + 1 if (col + 1 < grid_width) else 0
+                right_neighbor_col = col + 1 if (col + 1 < shape[1]) else 0
                 left_neighbor_col = col - 1
                 front_neighbor_lattice = lid - 1
-                back_neighbor_lattice = lid + 1 if (lid + 1 < grid_depth) else 0
+                back_neighbor_lattice = lid + 1 if (lid + 1 < shape[2]) else 0
 
                 if (not is_black if (lid % 2) else is_black):
                     horizontal_neighbor_col = left_neighbor_col if row % 2 else right_neighbor_col
@@ -56,35 +67,45 @@ def update_strategies(is_black, source, checkerboard_agents, probabilities):
                     horizontal_neighbor_col = right_neighbor_col if row % 2 else left_neighbor_col
 
                 neighbor_sum = (
-                    checkerboard_agents[upper_neighbor_row][col][lid]
-                +   checkerboard_agents[lower_neighbor_row][col][lid]
-                +   checkerboard_agents[row][col][lid]
-                +   checkerboard_agents[row][horizontal_neighbor_col][lid]
-                +   checkerboard_agents[row][col][front_neighbor_lattice]
-                +   checkerboard_agents[row][col][back_neighbor_lattice]
+                    checkerboard_agents[upper_neighbor_row, col, lid]
+                +   checkerboard_agents[lower_neighbor_row, col, lid]
+                +   checkerboard_agents[row, col, lid]
+                +   checkerboard_agents[row, horizontal_neighbor_col, lid]
+                +   checkerboard_agents[row, col, front_neighbor_lattice]
+                +   checkerboard_agents[row, col, back_neighbor_lattice]
                 )
 
-                if random() < probabilities[spin][neighbor_sum]:
-                    source[row][col][lid] = 1
+
+                random = xoroshiro128p_uniform_float32(rng_states, thread_id)
+
+                prob_row = 1 if spin + 1 else 0
+                prob_col = (neighbor_sum + 6) // 2
+                probability = probabilities[int(7 * prob_row + prob_col)]
+                if random < probability:
+                    source[row, col, lid] = 1
                 else:
-                    source[row][col][lid] = -1
+                    source[row, col, lid] = -1
 
 
-def update(black, white, reduced_neighbor_coupling, reduced_alpha):
+@cuda.reduce
+def sum_reduce(a, b):
+    return a + b
+
+
+def update(rng_states, black, white, reduced_neighbor_coupling, reduced_alpha, shape):
     """
     Update both arrays.
     """
-    number_of_traders = 2 * black.shape[0] * black.shape[1] * black.shape[2]
-    global_market = np.sum(black + white)
+    probabilities = np.empty((14, ), dtype=np.float32)
+    threads_per_block = (8, 8, 8)
+    blocks = (16, 16, 16)
+    number_of_traders = 2 * shape[0] * shape[1] * shape[2]
+    global_market = sum_reduce(black.ravel()) + sum_reduce(white.ravel())
     market_coupling = reduced_alpha * np.abs(global_market) / number_of_traders
-    probabilities = precompute_probabilities(reduced_neighbor_coupling, market_coupling)
-    black_thread = threading.Thread(group=None, target=update_strategies,
-                                    args=(True, black, white.copy(), probabilities))
-    white_thread = threading.Thread(group=None, target=update_strategies,
-                                    args=(False, white, black.copy(), probabilities))
+    precompute_probabilities(probabilities, reduced_neighbor_coupling, market_coupling)
 
-    black_thread.start()
-    white_thread.start()
-    black_thread.join()
-    white_thread.join()
+    update_strategies[blocks, threads_per_block](True, rng_states, black, white, probabilities, shape)
+    cuda.synchronize()
+    update_strategies[blocks, threads_per_block](False, rng_states, white, black, probabilities, shape)
+
     return global_market
