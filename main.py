@@ -5,6 +5,7 @@ from datetime import datetime
 import numpy as np
 from numba import cuda
 from numba.cuda.random import create_xoroshiro128p_states
+from sys import argv
 
 
 def read_config_file(filename):
@@ -21,7 +22,7 @@ def read_config_file(filename):
 
 
 if __name__ == "__main__":
-    config = read_config_file("pymarket.conf")
+    config = read_config_file("pymarket.conf" if len(argv) == 1 else argv[1])
     grid_height = int(config["grid_height"])
     grid_width = int(config["grid_width"])
     grid_depth = int(config["grid_depth"])
@@ -59,7 +60,6 @@ if __name__ == "__main__":
     start = datetime.now()
     for iteration in range(total_updates):
         global_market = update(rng_states, d_black, d_white, reduced_neighbor_coupling, reduced_alpha, shape)
-        print(global_market)
         magnetisation[iteration] = global_market
 
     elapsed_time = (datetime.now() - start)
