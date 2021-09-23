@@ -66,5 +66,7 @@ if __name__ == "__main__":
     flips_per_ns = total_updates * (grid_depth * grid_width * grid_height) / (elapsed_time.seconds * 1e9 + elapsed_time.microseconds * 1e3)
     print("time: {}.{}".format(elapsed_time.seconds, elapsed_time.microseconds))
     print("Spin updates per nanosecond: {:.4E}".format(flips_per_ns))
-    np.savetxt("global_market.dat", magnetisation / (grid_width * grid_height * grid_depth))
+    np.savetxt("magnetisation.dat", magnetisation / (grid_width * grid_height * grid_depth))
+    with open("log", "w") as f:
+        f.write(f"updates/ns: {flips_per_ns}\n")
     cuda.close()
