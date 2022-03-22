@@ -2,7 +2,9 @@
 
 from traders import init_traders, update
 from datetime import datetime
-from numpy import empty, nan, savetxt
+import numpy as np
+from numba import cuda
+from numba.cuda.random import create_xoroshiro128p_states
 from sys import argv
 
 MAX_FILE_SIZE = 100_000
@@ -33,50 +35,56 @@ def read_config_file(filename):
 
 def main():
     """Main function of the script"""
-
-    # Read the configuration file
-    if len(argv) > 1:
-        config_filename = argv[1]
-    else:
-        config_filename = "multising.conf"
-    config = read_config_file(config_filename)
-
-    # Cast the configuration input to the correct types
+    config = read_config_file("multising.conf" if len(argv) == 1 else argv[1])
     grid_height = int(config["grid_height"])
     grid_width = int(config["grid_width"])
+    grid_depth = int(config["grid_depth"])
+    shape = (grid_height, grid_width // 2, grid_depth)
+
+    for param in shape:
+        if (param % 8):
+            print("Please specify grid dimensions to be multiple of 8")
+            exit()
+
+    black = np.ones(shape, dtype=np.int32)
+    d_black = cuda.to_device(black)
+    white = np.ones(shape, dtype=np.int32)
+    d_white = cuda.to_device(white)
+
     alpha = float(config["alpha"])
     j = float(config["j"])
-    total_updates = int(config["total_updates"])
-    init_up = float(config["init_up"])
     beta = float(config["beta"])
-    reduced_alpha = -2 * beta * alpha
-    reduced_neighbour_coupling = -2 * beta * j
+    total_updates = int(config["total_updates"])
+    seed = int(config["seed"])
 
+    reduced_alpha = -2 * beta * alpha
+    reduced_neighbor_coupling = -2 * beta * j
+
+    threads_per_block = (8, 8, 8)
+    blocks = (16, 16, 16)
+    total_number_of_threads = (8 ** 3) * (16 ** 3)
+    rng_states = create_xoroshiro128p_states(total_number_of_threads, seed=seed)
     # assign magnetisation invalid values that will be overwritten during the
     # update
-    magnetisation = empty((min(total_updates, MAX_FILE_SIZE), ), dtype=float)
-    magnetisation[:] = nan
+    magnetisation = np.empty((min(total_updates, MAX_FILE_SIZE), ), dtype=float)
+    magnetisation[:] = np.nan
 
-    shape = (grid_height, grid_width)
-    black, white = init_traders(shape, init_up=init_up)
+    init_traders[blocks, threads_per_block](True, rng_states, d_black, shape, 0.5)
+    init_traders[blocks, threads_per_block](False, rng_states, d_white, shape, 0.5)
 
     start = datetime.now()
-    for ii in range(total_updates):
-        magnetisation[ii % MAX_FILE_SIZE] = update(
-            black, white, reduced_neighbour_coupling, reduced_alpha
-        )
-
-        if ii and not ii % MAX_FILE_SIZE:
-            savetxt(f"magnetisation_{ii}.dat", magnetisation)
+    for iteration in range(total_updates):
+        global_market = update(rng_states, d_black, d_white, reduced_neighbor_coupling, reduced_alpha, shape)
+        magnetisation[iteration % MAX_FILE_SIZE] = global_market
+        if iteration and not iteration % MAX_FILE_SIZE:
+            np.savetxt(f"magnetisation_{ii}.dat", magnetisation)
             magnetisation[:] = nan
-    elapsed_time = (datetime.now() - start)
-    savetxt(f"magnetisation_{ii}.dat", magnetisation)
-    flips_per_ns = total_updates * (grid_width * grid_height)
-    flips_per_ns /= (elapsed_time.seconds * 1e9 + elapsed_time.microseconds * 1e3)
 
-    print("Computation time: {}.{}".format(
-        elapsed_time.seconds, elapsed_time.microseconds)
-    )
+    elapsed_time = (datetime.now() - start)
+    cuda.close()
+    np.savetxt(f"magnetisation_{ii}.dat", magnetisation)
+    flips_per_ns = total_updates * (grid_depth * grid_width * grid_height) / (elapsed_time.seconds * 1e9 + elapsed_time.microseconds * 1e3)
+    print("time: {}.{}".format(elapsed_time.seconds, elapsed_time.microseconds))
     print("Spin updates per nanosecond: {:.4E}".format(flips_per_ns))
 
 
