@@ -3,14 +3,7 @@
 Pymarket is the implementation of the Bornholdt Ising Model in Python. All
 background information can be found at the
 [main page](https://github.com/kenokrieger/multising).
-You can switch to the 2D, 3D and GPU accelerated implementations by checking
-out their respective git branches "2D", "3D", "CUDA_2D", "CUDA_3D".
-
-For example
-```terminal
-git branch 3D
-```
-will update the repository to the Python 3D implementation.
+This is the 3D Python implementation.
 
 ## Usage
 
