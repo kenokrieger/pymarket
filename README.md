@@ -3,14 +3,7 @@
 Pymarket is the implementation of the Bornholdt Ising Model in Python. All
 background information can be found at the
 [main page](https://github.com/kenokrieger/multising).
-You can switch to the 2D, 3D and GPU accelerated implementations by checking
-out their respective git branches "2D", "3D", "CUDA_2D", "CUDA_3D".
-
-For example
-```terminal
-git branch 3D
-```
-will update the repository to the Python 3D implementation.
+This is the 2D GPU implementation.
 
 ## Usage
 
@@ -20,6 +13,8 @@ directory.
 The program expects a file "multising.conf" in the directory it is called from.
 This file contains all the values for the simulation like grid size and parameters.
 The path to the file can also be passed as the first argument in the terminal.
+
+**Note:** The minimal lattice side length in this implementation is 1024.
 
 Example configuration file:
 
