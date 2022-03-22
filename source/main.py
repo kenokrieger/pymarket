@@ -42,6 +42,7 @@ def main():
     config = read_config_file(config_filename)
 
     # Cast the configuration input to the correct types
+    grid_depth = int(config["grid_depth"])
     grid_height = int(config["grid_height"])
     grid_width = int(config["grid_width"])
     alpha = float(config["alpha"])
@@ -57,7 +58,7 @@ def main():
     magnetisation = empty((min(total_updates, MAX_FILE_SIZE), ), dtype=float)
     magnetisation[:] = nan
 
-    shape = (grid_height, grid_width)
+    shape = (grid_depth, grid_height, grid_width)
     black, white = init_traders(shape, init_up=init_up)
 
     start = datetime.now()
@@ -71,7 +72,7 @@ def main():
             magnetisation[:] = nan
     elapsed_time = (datetime.now() - start)
     savetxt(f"magnetisation_{ii}.dat", magnetisation)
-    flips_per_ns = total_updates * (grid_width * grid_height)
+    flips_per_ns = total_updates * (grid_width * grid_height * grid_depth)
     flips_per_ns /= (elapsed_time.seconds * 1e9 + elapsed_time.microseconds * 1e3)
 
     print("Computation time: {}.{}".format(
